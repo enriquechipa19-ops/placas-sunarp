@@ -4,15 +4,53 @@ import easyocr
 import re
 import sys
 import os
+import requests
 
-# Función para asegurar que el modelo se encuentre tanto en ejecución normal como en el .exe
+# ID de Google Drive de tu modelo `best2st.pt`
+FILE_ID = "1NaGagL7wArjLHw1pYFiaskUykypFWsJ_"
+NOMBRE_MODELO = "best2st.pt"
+
+def descargar_modelo_de_drive(file_id, destino):
+    """Descarga automáticamente archivos grandes desde Google Drive"""
+    url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    session = requests.Session()
+    
+    response = session.get(url, stream=True)
+    token = None
+    for key, value in response.cookies.items():
+        if key.startswith('download_warning'):
+            token = value
+            break
+
+    if token:
+        params = {'export': 'download', 'confirm': token}
+        response = session.get(url, params=params, stream=True)
+
+    with open(destino, "wb") as f:
+        for chunk in response.iter_content(32768):
+            if chunk:
+                f.write(chunk)
+
+# Función para asegurar que el modelo se encuentre localmente o se descargue en la nube
 def obtener_ruta_modelo(nombre_archivo):
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, nombre_archivo)
-    return os.path.join(os.path.abspath("."), nombre_archivo)
+    
+    ruta_local = os.path.join(os.path.abspath("."), nombre_archivo)
+    
+    # Si no existe (por ejemplo, en Streamlit Cloud), lo descargamos automáticamente
+    if not os.path.exists(ruta_local):
+        print("Descargando el modelo de IA desde Google Drive...")
+        try:
+            descargar_modelo_de_drive(FILE_ID, ruta_local)
+            print("¡Modelo descargado con éxito!")
+        except Exception as e:
+            print(f"Error al descargar el modelo: {e}")
+            
+    return ruta_local
 
-# 1. Configuración (Actualizado con el nuevo modelo)
-MODELO_YOLO = obtener_ruta_modelo("best2st.pt")
+# 1. Configuración (Actualizado con descarga automática)
+MODELO_YOLO = obtener_ruta_modelo(NOMBRE_MODELO)
 modelo = YOLO(MODELO_YOLO)
 lector = easyocr.Reader(['es'], gpu=False)
 
