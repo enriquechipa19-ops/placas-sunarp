@@ -1,0 +1,9 @@
+streamlit
+ultralytics
+opencv-python-headless
+easyocr
+seleniumbase
+pytesseract
+Pillow
+requests
+numpy
