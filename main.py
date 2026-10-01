@@ -6,50 +6,34 @@ import sys
 import os
 import requests
 
-# ID de Google Drive de tu modelo `best2st.pt`
-FILE_ID = "1NaGagL7wArjLHw1pYFiaskUykypFWsJ_"
+# Enlace directo de descarga desde tu GitHub Release
+URL_MODELO_GITHUB = "https://github.com/enriquechipa19-ops/placas-sunarp/releases/download/v1.0/best2st.pt"
 NOMBRE_MODELO = "best2st.pt"
 
-def descargar_modelo_de_drive(file_id, destino):
-    """Descarga automáticamente archivos grandes desde Google Drive"""
-    url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    session = requests.Session()
-    
-    response = session.get(url, stream=True)
-    token = None
-    for key, value in response.cookies.items():
-        if key.startswith('download_warning'):
-            token = value
-            break
-
-    if token:
-        params = {'export': 'download', 'confirm': token}
-        response = session.get(url, params=params, stream=True)
-
-    with open(destino, "wb") as f:
-        for chunk in response.iter_content(32768):
-            if chunk:
-                f.write(chunk)
-
-# Función para asegurar que el modelo se encuentre localmente o se descargue en la nube
+# Función para asegurar que el modelo se encuentre localmente o se descargue desde GitHub Release
 def obtener_ruta_modelo(nombre_archivo):
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, nombre_archivo)
     
     ruta_local = os.path.join(os.path.abspath("."), nombre_archivo)
     
-    # Si no existe (por ejemplo, en Streamlit Cloud), lo descargamos automáticamente
+    # Si no existe (en Streamlit Cloud), lo descargamos automáticamente
     if not os.path.exists(ruta_local):
-        print("Descargando el modelo de IA desde Google Drive...")
+        print("Descargando el modelo optimizado desde GitHub Release...")
         try:
-            descargar_modelo_de_drive(FILE_ID, ruta_local)
-            print("¡Modelo descargado con éxito!")
+            response = requests.get(URL_MODELO_GITHUB, stream=True)
+            response.raise_for_status()
+            with open(ruta_local, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            print("¡Modelo descargado y listo con éxito!")
         except Exception as e:
             print(f"Error al descargar el modelo: {e}")
             
     return ruta_local
 
-# 1. Configuración (Actualizado con descarga automática)
+# 1. Configuración
 MODELO_YOLO = obtener_ruta_modelo(NOMBRE_MODELO)
 modelo = YOLO(MODELO_YOLO)
 lector = easyocr.Reader(['es'], gpu=False)
