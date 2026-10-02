@@ -66,52 +66,55 @@ def consultar_mtc(placa_buscar):
     
     try:
         driver.get("https://rec.mtc.gob.pe/Citv/ArConsultaCitv")
-        time.sleep(5) 
+        time.sleep(6) # Pausa inicial prudente para asegurar la carga completa de la web
 
         for intento in range(3):
             codigo = resolver_captcha(driver)
             if not codigo or len(codigo) < 4:
                 driver.refresh()
-                time.sleep(5)
+                time.sleep(6) # Pausa tras refrescar captcha fallido
                 continue
 
             try:
                 wait = WebDriverWait(driver, 10)
                 
-                # Inyección JS para placa y captcha (Evita detección de bot)
+                # Inyección JS para placa y captcha simulando comportamiento humano
                 input_placa = wait.until(EC.element_to_be_clickable((By.ID, 'texFiltro')))
                 driver.execute_script(f"arguments[0].value = '{placa_limpia}';", input_placa)
                 driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles: true}));", input_placa)
+                time.sleep(1)
                 
                 input_captcha = wait.until(EC.element_to_be_clickable((By.ID, 'texCaptcha')))
                 driver.execute_script(f"arguments[0].value = '{codigo}';", input_captcha)
                 driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles: true}));", input_captcha)
+                time.sleep(1)
                 
                 btn = wait.until(EC.element_to_be_clickable((By.ID, 'btnBuscar')))
                 driver.execute_script("arguments[0].click();", btn)
                 
-                time.sleep(3) 
+                time.sleep(4) # Pausa para procesar la búsqueda
                 
-                # Manejo de Alertas (Código inválido)
+                # Manejo de Alertas (Código inválido o error en pantalla)
                 try:
                     alert = driver.switch_to.alert
                     alert.accept()
                     driver.refresh()
+                    time.sleep(5)
                     continue
                 except NoAlertPresentException:
                     pass
                 
-                time.sleep(5)
+                time.sleep(6) # Tiempo de espera para que renderice la tabla de resultados del MTC
                 if consulta_exitosa(driver):
                     return extraer_ultima_inspeccion(driver)
                 else:
                     driver.refresh()
-                    time.sleep(5)
+                    time.sleep(6)
             except Exception as e:
                 driver.refresh()
-                time.sleep(3)
+                time.sleep(5)
                 
-        return {"error": "Se superó el límite de intentos o el MTC bloqueó la consulta."}
+        return {"error": "Se superó el límite de intentos o el MTC bloqueó temporalmente la consulta."}
     except Exception as e:
         return {"error": f"Error crítico: {str(e)}"}
     finally:

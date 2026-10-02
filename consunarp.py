@@ -1,15 +1,17 @@
 import time
 import requests
-from seleniumbase import SB
 from PIL import Image
 import pytesseract
 import re
 import os
 import cv2
 import numpy as np
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 # ======================== CONFIGURACIÓN ========================
-# Rutas relativas o condicionales para evitar conflictos en la nube
 URL = "https://consultavehicular.sunarp.gob.pe/consulta-vehicular/inicio"
 
 PREFIJOS_A_MANTENER = [
@@ -98,36 +100,38 @@ def extraer_texto_desde_imagen(ruta_imagen):
     except Exception as e:
         return None
 
-def encontrar_imagen_resultado(sb):
-    todas = sb.find_elements("img")
-    filtradas = [img for img in todas if int(img.get_attribute("width") or 0) > 100]
-    if filtradas:
-        return max(filtradas, key=lambda img: int(img.get_attribute("width") or 0) * int(img.get_attribute("height") or 0))
-    return None
-
 def consultar_sunarp(placa):
-    """Función de servicio para el bot y la app web."""
+    """Función de servicio para el bot y la app web usando Selenium estándar."""
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    
+    driver = webdriver.Chrome(options=options)
+    
     try:
-        # Forzar a SeleniumBase a utilizar la carpeta /tmp con permisos de escritura en la nube
-        os.environ["SELENIUMBASE_DOWNLOAD_FOLDER"] = "/tmp"
+        driver.get(URL)
+        time.sleep(5)
         
-        with SB(uc=True, headed=False) as sb:
-            sb.uc_open_with_reconnect(URL, reconnect_time=5)
-            sb.wait_for_element("#nroPlaca", timeout=30)
-            time.sleep(8)
-            sb.execute_script("const input = document.querySelector('#nroPlaca'); input.value = arguments[0]; input.dispatchEvent(new Event('input', {bubbles: true}));", placa)
-            time.sleep(4)
-            sb.execute_script("document.querySelector('.btn-sunarp-green').click();")
-            time.sleep(16)
-            
-            img_element = encontrar_imagen_resultado(sb)
-            if img_element:
-                img_element.screenshot("/tmp/sunarp_resultado.png")
-            else:
-                sb.save_screenshot("/tmp/sunarp_resultado.png")
+        wait = WebDriverWait(driver, 30)
+        input_placa = wait.until(EC.element_to_be_clickable((By.ID, 'nroPlaca')))
+        driver.execute_script("const input = document.querySelector('#nroPlaca'); input.value = arguments[0]; input.dispatchEvent(new Event('input', {bubbles: true}));", placa)
+        time.sleep(4)
+        
+        btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '.btn-sunarp-green')))
+        driver.execute_script("arguments[0].click();", btn)
+        time.sleep(16)
+        
+        driver.save_screenshot("/tmp/sunarp_resultado.png")
+        driver.quit()
 
-            datos = extraer_texto_desde_imagen("/tmp/sunarp_resultado.png")
-            if os.path.exists("/tmp/sunarp_resultado.png"): os.remove("/tmp/sunarp_resultado.png")
-            return datos if datos else {"error": "Sin datos"}
+        datos = extraer_texto_desde_imagen("/tmp/sunarp_resultado.png")
+        if os.path.exists("/tmp/sunarp_resultado.png"): os.remove("/tmp/sunarp_resultado.png")
+        return datos if datos else {"error": "Sin datos"}
     except Exception as e:
+        try:
+            driver.quit()
+        except:
+            pass
         return {"error": str(e)}
