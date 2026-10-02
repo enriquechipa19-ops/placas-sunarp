@@ -9,9 +9,7 @@ import cv2
 import numpy as np
 
 # ======================== CONFIGURACIÓN ========================
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-os.environ['TESSDATA_PREFIX'] = r'C:\Program Files\Tesseract-OCR\tessdata'
-
+# Rutas relativas o condicionales para evitar conflictos en la nube
 URL = "https://consultavehicular.sunarp.gob.pe/consulta-vehicular/inicio"
 
 PREFIJOS_A_MANTENER = [
@@ -110,6 +108,9 @@ def encontrar_imagen_resultado(sb):
 def consultar_sunarp(placa):
     """Función de servicio para el bot y la app web."""
     try:
+        # Forzar a SeleniumBase a utilizar la carpeta /tmp con permisos de escritura en la nube
+        os.environ["SELENIUMBASE_DOWNLOAD_FOLDER"] = "/tmp"
+        
         with SB(uc=True, headed=False) as sb:
             sb.uc_open_with_reconnect(URL, reconnect_time=5)
             sb.wait_for_element("#nroPlaca", timeout=30)
@@ -121,12 +122,12 @@ def consultar_sunarp(placa):
             
             img_element = encontrar_imagen_resultado(sb)
             if img_element:
-                img_element.screenshot("sunarp_resultado.png")
+                img_element.screenshot("/tmp/sunarp_resultado.png")
             else:
-                sb.save_screenshot("sunarp_resultado.png")
+                sb.save_screenshot("/tmp/sunarp_resultado.png")
 
-            datos = extraer_texto_desde_imagen("sunarp_resultado.png")
-            if os.path.exists("sunarp_resultado.png"): os.remove("sunarp_resultado.png")
+            datos = extraer_texto_desde_imagen("/tmp/sunarp_resultado.png")
+            if os.path.exists("/tmp/sunarp_resultado.png"): os.remove("/tmp/sunarp_resultado.png")
             return datos if datos else {"error": "Sin datos"}
     except Exception as e:
         return {"error": str(e)}

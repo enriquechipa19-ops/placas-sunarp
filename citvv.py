@@ -24,10 +24,10 @@ def resolver_captcha(driver):
             callback(cnv.toDataURL('image/png').substring(22));
         """, img_element)
         
-        with open("temp_captcha.png", 'wb') as f:
+        with open("/tmp/temp_captcha.png", 'wb') as f:
             f.write(base64.b64decode(b64_data))
             
-        img = cv2.imread("temp_captcha.png")
+        img = cv2.imread("/tmp/temp_captcha.png")
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
         results = reader.readtext(binary)
@@ -53,8 +53,8 @@ def consulta_exitosa(driver):
 
 def consultar_mtc(placa_buscar):
     options = webdriver.ChromeOptions()
-    # Opciones obligatorias para despliegue en la nube (Streamlit Cloud)
-    options.add_argument("--headless")
+    # Opciones obligatorias para que funcione en el servidor de Streamlit Cloud
+    options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
