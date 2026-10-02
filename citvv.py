@@ -1,121 +1,431 @@
-import cv2
-import numpy as np
-import easyocr
+import os
 import time
-import base64
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoAlertPresentException
 
-# ========== CONFIGURACIÓN ==========
-reader = easyocr.Reader(['en'], gpu=False)
 
-def resolver_captcha(driver):
-    try:
-        img_element = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID, 'imgCaptcha')))
-        b64_data = driver.execute_async_script("""
-            var ele = arguments[0], callback = arguments[1];
-            var cnv = document.createElement('canvas');
-            cnv.width = ele.naturalWidth;
-            cnv.height = ele.naturalHeight;
-            cnv.getContext('2d').drawImage(ele, 0, 0);
-            callback(cnv.toDataURL('image/png').substring(22));
-        """, img_element)
-        
-        with open("/tmp/temp_captcha.png", 'wb') as f:
-            f.write(base64.b64decode(b64_data))
-            
-        img = cv2.imread("/tmp/temp_captcha.png")
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY_INV)
-        results = reader.readtext(binary)
-        if results:
-            texto = "".join([res[1] for res in results])
-            return "".join(filter(str.isdigit, texto))
-        return None
-    except Exception:
-        return None
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+URL_MTC = "https://rec.mtc.gob.pe/Citv/ArConsultaCitv"
+
+CARPETA_CAPTURAS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "capturas_citv"
+)
+
+os.makedirs(
+    CARPETA_CAPTURAS,
+    exist_ok=True
+)
+
+
+# ============================================================
+# EXTRAER DATOS DE CITV
+# ============================================================
 
 def extraer_ultima_inspeccion(driver):
+
     datos = {}
+
     try:
-        datos['Empresa Certificadora'] = driver.find_element(By.XPATH, "//span[@id='Spv1_1']").text.strip()
-        datos['Observaciones'] = driver.find_element(By.XPATH, "//span[@id='Spv1_11']").text.strip()
+
+        datos["Empresa Certificadora"] = driver.find_element(
+            By.XPATH,
+            "//span[@id='Spv1_1']"
+        ).text.strip()
+
     except Exception:
-        datos['Empresa Certificadora'] = "No encontrada"
-        datos['Observaciones'] = "No encontrada"
+
+        datos["Empresa Certificadora"] = "No encontrada"
+
+
+    try:
+
+        datos["Observaciones"] = driver.find_element(
+            By.XPATH,
+            "//span[@id='Spv1_11']"
+        ).text.strip()
+
+    except Exception:
+
+        datos["Observaciones"] = "No encontrada"
+
+
     return datos
 
+
+# ============================================================
+# VERIFICAR RESULTADO
+# ============================================================
+
 def consulta_exitosa(driver):
-    return len(driver.find_elements(By.XPATH, "//*[contains(text(),'ÚLTIMO DOCUMENTO REGISTRADO')]")) > 0
+
+    elementos = driver.find_elements(
+        By.XPATH,
+        "//*[contains(text(),'ÚLTIMO DOCUMENTO REGISTRADO')]"
+    )
+
+    return len(elementos) > 0
+
+
+# ============================================================
+# CONSULTA CITV / MTC
+# ============================================================
 
 def consultar_mtc(placa_buscar):
+
+    # --------------------------------------------------------
+    # VALIDAR PLACA
+    # --------------------------------------------------------
+
+    if not placa_buscar:
+
+        return {
+            "estado": "error",
+            "error": "No se recibió ninguna placa."
+        }
+
+
+    placa_original = placa_buscar
+
+    placa_limpia = (
+        placa_buscar
+        .upper()
+        .replace("-", "")
+        .replace(" ", "")
+        .strip()
+    )
+
+
+    print()
+    print("=" * 60)
+    print("CONSULTA CITV / MTC")
+    print("=" * 60)
+    print(
+        f"Placa detectada : {placa_original}"
+    )
+    print(
+        f"Placa para MTC  : {placa_limpia}"
+    )
+    print("=" * 60)
+
+
+    # ========================================================
+    # CONFIGURAR CHROME
+    # ========================================================
+
     options = webdriver.ChromeOptions()
-    # Opciones obligatorias para que funcione en el servidor de Streamlit Cloud
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    
-    driver = webdriver.Chrome(options=options)
-    
-    # Limpiamos la placa: quitamos guiones para asegurar el formato que espera el MTC
-    placa_limpia = placa_buscar.replace("-", "")
-    
+
+    # Chrome visible para que pueda completarse
+    # el CAPTCHA manualmente.
+
+    options.add_argument(
+        "--start-maximized"
+    )
+
+
+    driver = webdriver.Chrome(
+        options=options
+    )
+
+
     try:
-        driver.get("https://rec.mtc.gob.pe/Citv/ArConsultaCitv")
-        time.sleep(6) # Pausa inicial prudente para asegurar la carga completa de la web
 
-        for intento in range(3):
-            codigo = resolver_captcha(driver)
-            if not codigo or len(codigo) < 4:
-                driver.refresh()
-                time.sleep(6) # Pausa tras refrescar captcha fallido
-                continue
+        # ====================================================
+        # 1. ABRIR MTC
+        # ====================================================
 
-            try:
-                wait = WebDriverWait(driver, 10)
-                
-                # Inyección JS para placa y captcha simulando comportamiento humano
-                input_placa = wait.until(EC.element_to_be_clickable((By.ID, 'texFiltro')))
-                driver.execute_script(f"arguments[0].value = '{placa_limpia}';", input_placa)
-                driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles: true}));", input_placa)
-                time.sleep(1)
-                
-                input_captcha = wait.until(EC.element_to_be_clickable((By.ID, 'texCaptcha')))
-                driver.execute_script(f"arguments[0].value = '{codigo}';", input_captcha)
-                driver.execute_script("arguments[0].dispatchEvent(new Event('input', {bubbles: true}));", input_captcha)
-                time.sleep(1)
-                
-                btn = wait.until(EC.element_to_be_clickable((By.ID, 'btnBuscar')))
-                driver.execute_script("arguments[0].click();", btn)
-                
-                time.sleep(4) # Pausa para procesar la búsqueda
-                
-                # Manejo de Alertas (Código inválido o error en pantalla)
-                try:
-                    alert = driver.switch_to.alert
-                    alert.accept()
-                    driver.refresh()
-                    time.sleep(5)
-                    continue
-                except NoAlertPresentException:
-                    pass
-                
-                time.sleep(6) # Tiempo de espera para que renderice la tabla de resultados del MTC
-                if consulta_exitosa(driver):
-                    return extraer_ultima_inspeccion(driver)
-                else:
-                    driver.refresh()
-                    time.sleep(6)
-            except Exception as e:
-                driver.refresh()
-                time.sleep(5)
-                
-        return {"error": "Se superó el límite de intentos o el MTC bloqueó temporalmente la consulta."}
+        print()
+        print("Abriendo página del MTC...")
+
+        driver.get(
+            URL_MTC
+        )
+
+        time.sleep(6)
+
+        print(
+            "Página MTC cargada."
+        )
+
+
+        # ====================================================
+        # 2. CAMPO DE PLACA
+        # ====================================================
+
+        print(
+            "Buscando campo de placa..."
+        )
+
+        wait = WebDriverWait(
+            driver,
+            20
+        )
+
+        input_placa = wait.until(
+            EC.element_to_be_clickable(
+                (By.ID, "texFiltro")
+            )
+        )
+
+
+        # ====================================================
+        # 3. INTRODUCIR PLACA
+        # ====================================================
+
+        print(
+            "Introduciendo placa automáticamente..."
+        )
+
+        input_placa.clear()
+
+        input_placa.send_keys(
+            placa_limpia
+        )
+
+        print(
+            f"Placa introducida: {placa_limpia}"
+        )
+
+
+        # ====================================================
+        # 4. ESPERAR 15 SEGUNDOS
+        # ====================================================
+
+        print()
+        print("=" * 60)
+        print("ESPERANDO CAPTCHA")
+        print("=" * 60)
+        print(
+            "Tienes 15 segundos para completar "
+            "el CAPTCHA."
+        )
+        print("=" * 60)
+
+        time.sleep(15)
+
+        print(
+            "Tiempo terminado."
+        )
+
+
+        # ====================================================
+        # 5. BOTÓN BUSCAR
+        # ====================================================
+
+        print()
+        print(
+            "Buscando botón de consulta..."
+        )
+
+        btn = wait.until(
+            EC.element_to_be_clickable(
+                (By.ID, "btnBuscar")
+            )
+        )
+
+
+        # ====================================================
+        # 6. CLIC AUTOMÁTICO
+        # ====================================================
+
+        print(
+            "Realizando consulta automáticamente..."
+        )
+
+        btn.click()
+
+        print(
+            "✓ Clic realizado."
+        )
+
+
+        # ====================================================
+        # 7. ESPERAR RESULTADO
+        # ====================================================
+
+        print()
+        print(
+            "Esperando resultado CITV..."
+        )
+
+        time.sleep(8)
+
+        print(
+            "✓ Resultado cargado."
+        )
+
+
+        # ====================================================
+        # 8. REDUCIR ZOOM
+        # ====================================================
+
+        print(
+            "Preparando captura CITV..."
+        )
+
+        try:
+
+            driver.execute_script("""
+                document.body.style.zoom = '75%';
+            """)
+
+            time.sleep(2)
+
+        except Exception:
+
+            pass
+
+
+        # ====================================================
+        # 9. CREAR NOMBRE DE CAPTURA
+        # ====================================================
+
+        timestamp = int(
+            time.time()
+        )
+
+        nombre_captura = (
+            f"CITV_{placa_limpia}_{timestamp}.png"
+        )
+
+        ruta_captura = os.path.join(
+            CARPETA_CAPTURAS,
+            nombre_captura
+        )
+
+
+        # ====================================================
+        # 10. GUARDAR CAPTURA
+        # ====================================================
+
+        print()
+        print(
+            "Guardando captura de CITV..."
+        )
+
+        driver.save_screenshot(
+            ruta_captura
+        )
+
+        print(
+            "✓ Captura CITV guardada."
+        )
+
+        print(
+            f"Ruta: {ruta_captura}"
+        )
+
+
+        # ====================================================
+        # 11. EXTRAER DATOS
+        # ====================================================
+
+        print()
+        print(
+            "Extrayendo información..."
+        )
+
+        datos = extraer_ultima_inspeccion(
+            driver
+        )
+
+
+        # ====================================================
+        # 12. AGREGAR DATOS
+        # ====================================================
+
+        datos["Placa"] = placa_original
+
+        datos["captura"] = ruta_captura
+
+        datos["estado"] = "ok"
+
+
+        # ====================================================
+        # 13. MOSTRAR DATOS
+        # ====================================================
+
+        print()
+        print(
+            "✓ Consulta CITV finalizada."
+        )
+
+        print(
+            f"Empresa: "
+            f"{datos['Empresa Certificadora']}"
+        )
+
+        print(
+            f"Observaciones: "
+            f"{datos['Observaciones']}"
+        )
+
+
+        return datos
+
+
     except Exception as e:
-        return {"error": f"Error crítico: {str(e)}"}
+
+        print()
+        print("=" * 60)
+        print("ERROR EN CONSULTA CITV")
+        print("=" * 60)
+        print(
+            str(e)
+        )
+        print("=" * 60)
+
+
+        return {
+            "estado": "error",
+            "error": str(e)
+        }
+
+
     finally:
-        driver.quit()
+
+        # ====================================================
+        # CERRAR NAVEGADOR
+        # ====================================================
+
+        try:
+
+            driver.quit()
+
+            print()
+            print(
+                "Navegador CITV cerrado."
+            )
+
+        except Exception:
+
+            pass
+
+
+# ============================================================
+# PRUEBA DIRECTA
+# ============================================================
+
+if __name__ == "__main__":
+
+    placa_prueba = "BVG-272"
+
+    resultado = consultar_mtc(
+        placa_prueba
+    )
+
+    print()
+    print("=" * 60)
+    print("RESULTADO FINAL CITV")
+    print("=" * 60)
+
+    print(
+        resultado
+    )

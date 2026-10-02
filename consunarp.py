@@ -1,140 +1,285 @@
-import time
-import requests
-from seleniumbase import sb_cdp
-from PIL import Image
-import pytesseract
-import re
 import os
-import cv2
-import numpy as np
+import time
+from seleniumbase import sb_cdp
 
-# ======================== CONFIGURACIÓN ========================
-URL = "https://consultavehicular.sunarp.gob.pe/"
 
-PREFIJOS_A_MANTENER = [
-    "DATOS DEL VEHÍCULO", "N° PLACA:", "N* PLACA:", "NO PLACA:", "N? PLACA:", 
-    "N° SERIE:", "N* SERIE:", "NO SERIE:", "N° VIN:", "N° MOTOR:", "COLOR:", 
-    "MARCA:", "MODELO:", "PLACA VIGENTE:", "PLACA ANTERIOR:", "ESTADO:", 
-    "ANOTACIONES:", "SEDE:", "AÑO DE MODELO:", "PROPIETARIO(S):"
-]
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
 
-EQUIVALENCIAS_PREFIJOS = {
-    "NO9PLACA": "N° PLACA", "NOSERIE": "N° SERIE", "N*MOTOR": "N° MOTOR", 
-    "NEVIN": "N° VIN", "N*VIN": "N° VIN", "N? PLACA": "N° PLACA", "N?PLACA": "N° PLACA", 
-    "PLACAVIGENTE": "PLACA VIGENTE", "PLACA ANTERIOR": "PLACA ANTERIOR", 
-    "N°PLACA": "N° PLACA", "N°SERIE": "N° SERIE", "N°MOTOR": "N° MOTOR", 
-    "N°VIN": "N° VIN", "NO PLACA": "N° PLACA", "NO SERIE": "N° SERIE", 
-    "NO MOTOR": "N° MOTOR", "NO VIN": "N° VIN"
-}
+URL_SUNARP = "https://consultavehicular.sunarp.gob.pe/"
 
-# ==================== FUNCIONES DE PROCESAMIENTO ====================
-def preprocesar_para_ocr(ruta_imagen):
-    img = cv2.imread(ruta_imagen)
-    if img is None: return
-    img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    enhanced = clahe.apply(gray)
-    kernel = np.array([[0, -1, 0], [-1, 5,-1], [0, -1, 0]])
-    sharpened = cv2.filter2D(enhanced, -1, kernel)
-    _, binary = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    cv2.imwrite(ruta_imagen, binary)
+CARPETA_CAPTURAS = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "capturas_sunarp"
+)
 
-def limpiar_valor(texto):
-    texto = re.sub(r'[^A-Z0-9\s\-]', '', texto, flags=re.IGNORECASE)
-    partes = texto.split()
-    partes_filtradas = [p for p in partes if not (len(p) == 1 and p.isalpha())]
-    texto = ' '.join(partes_filtradas).strip()
-    texto = re.sub(r'^\d+\s+', '', texto)
-    texto = re.sub(r'\s+\d+$', '', texto)
-    texto = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', texto)
-    texto = re.sub(r'\s+', ' ', texto).strip()
-    return texto
+os.makedirs(CARPETA_CAPTURAS, exist_ok=True)
 
-def extraer_texto_desde_imagen(ruta_imagen):
-    try:
-        preprocesar_para_ocr(ruta_imagen)
-        img = Image.open(ruta_imagen)
-        configs = ['--psm 6', '--psm 4', '--psm 3']
-        texto = ""
-        for cfg in configs:
-            texto = pytesseract.image_to_string(img, lang='spa', config=cfg)
-            if len(texto.strip()) > 50: break
-        
-        lineas = texto.splitlines()
-        datos = {}
-        ultima_clave = None
-        for linea in lineas:
-            linea_limpia = linea.strip()
-            if not linea_limpia: continue
-            clave_detectada = None
-            for deformado, normalizado in EQUIVALENCIAS_PREFIJOS.items():
-                if re.search(rf'\b{re.escape(deformado)}\b', linea_limpia, re.IGNORECASE):
-                    partes = re.split(r':\s*', linea_limpia, maxsplit=1)
-                    if len(partes) == 2:
-                        valor = limpiar_valor(partes[1])
-                        if valor: datos[normalizado] = valor
-                        else: ultima_clave = normalizado
-                    else: ultima_clave = normalizado
-                    clave_detectada = normalizado
-                    break
-            if not clave_detectada:
-                for prefijo in PREFIJOS_A_MANTENER:
-                    if linea_limpia.upper().startswith(prefijo.upper()):
-                        partes = linea_limpia.split(':', 1)
-                        if len(partes) == 2:
-                            valor = limpiar_valor(partes[1])
-                            if valor: datos[prefijo.rstrip(':')] = valor
-                            else: ultima_clave = prefijo.rstrip(':')
-                        else: ultima_clave = prefijo.rstrip(':')
-                        clave_detectada = prefijo.rstrip(':')
-                        break
-            if not clave_detectada and ultima_clave:
-                valor = limpiar_valor(linea_limpia)
-                if valor: datos[ultima_clave] = valor
-                ultima_clave = None
-        return datos
-    except Exception as e:
-        return None
+
+# ============================================================
+# FUNCIÓN PRINCIPAL
+# ============================================================
 
 def consultar_sunarp(placa):
-    """Función de servicio integrada con la lógica CDP de tu compañero."""
+
+    # --------------------------------------------------------
+    # 1. VALIDAR Y LIMPIAR PLACA
+    # --------------------------------------------------------
+
+    if not placa:
+        return {
+            "estado": "error",
+            "mensaje": "No se recibió ninguna placa."
+        }
+
+    placa_original = placa
+
+    placa = (
+        placa.upper()
+        .replace("-", "")
+        .replace(" ", "")
+        .strip()
+    )
+
+    print()
+    print("=" * 60)
+    print("CONSULTA SUNARP")
+    print("=" * 60)
+    print(f"Placa detectada   : {placa_original}")
+    print(f"Placa para SUNARP : {placa}")
+    print("=" * 60)
+
+    sb = None
+
     try:
-        # Iniciamos con CDP en modo headless para el servidor en la nube
-        sb = sb_cdp.Chrome(URL, headless=True)
-        
+
+        # ----------------------------------------------------
+        # 2. ABRIR SUNARP
+        # ----------------------------------------------------
+
+        print("\nAbriendo SUNARP...")
+
+        sb = sb_cdp.Chrome(URL_SUNARP)
+
+        sb.sleep(5)
+
+        print("SUNARP cargado.")
+
+        # ----------------------------------------------------
+        # 3. LOCALIZAR CAMPO DE PLACA
+        # ----------------------------------------------------
+
+        xpath_placa = '//*[@id="nroPlaca"]'
+
+        print("Buscando campo de placa...")
+
+        sb.assert_element(
+            xpath_placa,
+            timeout=20
+        )
+
+        # ----------------------------------------------------
+        # 4. INTRODUCIR PLACA AUTOMÁTICAMENTE
+        # ----------------------------------------------------
+
+        print("Introduciendo placa automáticamente...")
+
+        sb.click(xpath_placa)
+
+        sb.clear(xpath_placa)
+
+        sb.type(
+            xpath_placa,
+            placa
+        )
+
+        print(f"Placa introducida: {placa}")
+
+        # ----------------------------------------------------
+        # 5. ESPERAR 15 SEGUNDOS
+        # ----------------------------------------------------
+
+        print()
+        print(
+            "Esperando 15 segundos antes de realizar "
+            "la consulta..."
+        )
+
+        sb.sleep(15)
+
+        print("Tiempo de espera terminado.")
+
+        # ----------------------------------------------------
+        # 6. BOTÓN REALIZAR CONSULTA
+        # ----------------------------------------------------
+
+        xpath_boton = (
+            "/html/body/app-root/nz-content/div/"
+            "app-inicio/app-vehicular/nz-layout/nz-content/"
+            "div/nz-card/div/app-form-datos-consulta/"
+            "div/form/fieldset/nz-form-item[3]/"
+            "nz-form-control/div/div/div/button"
+        )
+
+        print()
+        print(
+            "Buscando botón 'Realizar consulta'..."
+        )
+
+        sb.assert_element(
+            xpath_boton,
+            timeout=20
+        )
+
+        # ----------------------------------------------------
+        # 7. CLIC AUTOMÁTICO
+        # ----------------------------------------------------
+
+        print(
+            "Realizando consulta automáticamente..."
+        )
+
+        sb.click(xpath_boton)
+
+        print("✓ Clic realizado.")
+
+        # ----------------------------------------------------
+        # 8. ESPERAR RESULTADO
+        # ----------------------------------------------------
+
+        print()
+        print(
+            "Esperando respuesta de SUNARP..."
+        )
+
+        sb.sleep(10)
+
+        print("✓ Respuesta recibida.")
+
+        # ----------------------------------------------------
+        # 9. PREPARAR CAPTURA
+        # ----------------------------------------------------
+
+        print()
+        print(
+            "Preparando captura de SUNARP..."
+        )
+
         try:
-            # 1. Intentar resolver captcha si lo hubiera
-            try:
-                sb.solve_captcha()
-            except Exception:
-                pass
-            
-            sb.sleep(5)
-            
-            # 2. Manejo del input de la Placa
-            xpath_placa = '//*[@id="nroPlaca"]'
-            sb.assert_element(xpath_placa, timeout=15)
-            sb.click(xpath_placa)
-            sb.type(xpath_placa, placa)
+
+            # Reducir el zoom para que entre más
+            # información en la captura.
+
+            sb.execute_script("""
+                document.body.style.zoom = '75%';
+            """)
+
             sb.sleep(2)
-            
-            # 3. Click en el botón Buscar
-            xpath_boton = "/html/body/app-root/nz-content/div/app-inicio/app-vehicular/nz-layout/nz-content/div/nz-card/div/app-form-datos-consulta/div/form/fieldset/nz-form-item[3]/nz-form-control/div/div/div/button"
-            sb.click(xpath_boton)
-            
-            # 4. Esperar resultados y capturar pantalla en /tmp
-            sb.sleep(8)
-            screenshot_path = "/tmp/sunarp_resultado.png"
-            sb.save_screenshot(screenshot_path)
-            
-            datos = extraer_texto_desde_imagen(screenshot_path)
-            if os.path.exists(screenshot_path): 
-                os.remove(screenshot_path)
-                
-            return datos if datos else {"error": "Sin datos"}
-        finally:
-            sb.driver.stop()
-            
+
+        except Exception:
+
+            print(
+                "No se pudo aplicar el zoom. "
+                "Se continuará con la captura normal."
+            )
+
+        # ----------------------------------------------------
+        # 10. CREAR NOMBRE DE CAPTURA
+        # ----------------------------------------------------
+
+        timestamp = int(time.time())
+
+        nombre_captura = (
+            f"SUNARP_{placa}_{timestamp}.png"
+        )
+
+        ruta_captura = os.path.join(
+            CARPETA_CAPTURAS,
+            nombre_captura
+        )
+
+        # ----------------------------------------------------
+        # 11. GUARDAR CAPTURA
+        # ----------------------------------------------------
+
+        print(
+            "Guardando captura de SUNARP..."
+        )
+
+        sb.save_screenshot(
+            nombre_captura,
+            folder=CARPETA_CAPTURAS
+        )
+
+        print(
+            "✓ Captura SUNARP guardada."
+        )
+
+        print()
+        print("Ruta:")
+        print(ruta_captura)
+
+        # ----------------------------------------------------
+        # 12. DEVOLVER RESULTADO
+        # ----------------------------------------------------
+
+        return {
+            "estado": "ok",
+            "placa": placa,
+            "captura": ruta_captura
+        }
+
     except Exception as e:
-        return {"error": f"Error CDP: {str(e)}"}
+
+        print()
+        print("=" * 60)
+        print("ERROR EN LA CONSULTA SUNARP")
+        print("=" * 60)
+        print(str(e))
+        print("=" * 60)
+
+        return {
+            "estado": "error",
+            "mensaje": str(e)
+        }
+
+    finally:
+
+        # ----------------------------------------------------
+        # 13. CERRAR NAVEGADOR
+        # ----------------------------------------------------
+
+        if sb is not None:
+
+            try:
+
+                sb.driver.stop()
+
+                print(
+                    "\nNavegador SUNARP cerrado."
+                )
+
+            except Exception:
+
+                pass
+
+
+# ============================================================
+# PRUEBA DIRECTA
+# ============================================================
+
+if __name__ == "__main__":
+
+    placa_prueba = "BVG-272"
+
+    resultado = consultar_sunarp(
+        placa_prueba
+    )
+
+    print()
+    print("=" * 60)
+    print("RESULTADO FINAL")
+    print("=" * 60)
+
+    print(resultado)
