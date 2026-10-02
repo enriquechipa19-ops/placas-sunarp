@@ -1,15 +1,12 @@
 import time
 import requests
+from seleniumbase import sb_cdp
 from PIL import Image
 import pytesseract
 import re
 import os
 import cv2
 import numpy as np
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 # ======================== CONFIGURACIÓN ========================
 URL = "https://consultavehicular.sunarp.gob.pe/consulta-vehicular/inicio"
@@ -101,37 +98,37 @@ def extraer_texto_desde_imagen(ruta_imagen):
         return None
 
 def consultar_sunarp(placa):
-    """Función de servicio para el bot y la app web usando Selenium estándar."""
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    
-    driver = webdriver.Chrome(options=options)
-    
+    """Función de servicio para la app web usando SeleniumBase CDP."""
     try:
-        driver.get(URL)
-        time.sleep(5)
+        # Abrir el navegador en modo headless nativo para la nube
+        sb = sb_cdp.Chrome(URL, headless=True)
         
-        wait = WebDriverWait(driver, 30)
-        input_placa = wait.until(EC.element_to_be_clickable((By.ID, 'nroPlaca')))
-        driver.execute_script("const input = document.querySelector('#nroPlaca'); input.value = arguments[0]; input.dispatchEvent(new Event('input', {bubbles: true}));", placa)
-        time.sleep(4)
-        
-        btn = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, '.btn-sunarp-green')))
-        driver.execute_script("arguments[0].click();", btn)
-        time.sleep(16)
-        
-        driver.save_screenshot("/tmp/sunarp_resultado.png")
-        driver.quit()
-
-        datos = extraer_texto_desde_imagen("/tmp/sunarp_resultado.png")
-        if os.path.exists("/tmp/sunarp_resultado.png"): os.remove("/tmp/sunarp_resultado.png")
-        return datos if datos else {"error": "Sin datos"}
-    except Exception as e:
         try:
-            driver.quit()
-        except:
-            pass
-        return {"error": str(e)}
+            # Esperar a que el campo de placa sea visible
+            xpath_placa = '//*[@id="nroPlaca"]'
+            sb.assert_element(xpath_placa, timeout=15)
+            sb.click(xpath_placa)
+            sb.type(xpath_placa, placa)
+            
+            # Click en el botón Buscar de Sunarp
+            xpath_boton = "/html/body/app-root/nz-content/div/app-inicio/app-vehicular/nz-layout/nz-content/div/nz-card/div/app-form-datos-consulta/div/form/fieldset/nz-form-item[3]/nz-form-control/div/div/div/button"
+            sb.click(xpath_boton)
+            
+            # Esperar a que carguen los resultados en pantalla
+            sb.sleep(8)
+            
+            # Guardar la captura directamente en la carpeta temporal /tmp
+            screenshot_path = "/tmp/sunarp_resultado.png"
+            sb.save_screenshot(screenshot_path)
+            
+            # Procesar la imagen con OCR
+            datos = extraer_texto_desde_imagen(screenshot_path)
+            if os.path.exists(screenshot_path): 
+                os.remove(screenshot_path)
+                
+            return datos if datos else {"error": "Sin datos"}
+        finally:
+            sb.driver.quit()
+            
+    except Exception as e:
+        return {"error": f"Error CDP: {str(e)}"}
